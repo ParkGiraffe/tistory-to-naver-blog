@@ -234,133 +234,107 @@ def write_multi_format_to_clipboard(web_archive_dict, html_content, plain_text):
         print(f"Error writing to clipboard: {e}")
         return False
 
+# Naver SmartEditor-compatible HTML styles, copied from
+# giraffe-skills/blog/scripts/paste_to_naver.py so this script and the /blog
+# skill produce visually identical output (yellow-highlighted bold headings +
+# explicit body span reset to block style bleed from headings).
+HEADING_SPAN_STYLE = "font-size:24px;background-color:#fff593;"
+BODY_SPAN_STYLE = (
+    "font-size:15px;font-weight:normal;background-color:transparent;"
+    "color:#212529;"
+)
+BARRIER_HTML = '<p><br></p>'
+
+
+def _html_escape(s):
+    return (s.replace("&", "&amp;").replace("<", "&lt;")
+             .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def _heading_html(text):
+    return (
+        f'<p><span style="{HEADING_SPAN_STYLE}"><b>{_html_escape(text)}</b></span></p>'
+        + BARRIER_HTML
+    )
+
+
+def _body_html_from_text(text_with_br_tokens):
+    """Wrap a paragraph of text into a body-styled <p>. The input may contain
+    raw __BR_TOKEN__ markers which are converted to <br> after escaping so the
+    surrounding text stays HTML-safe."""
+    escaped = _html_escape(text_with_br_tokens).replace('__BR_TOKEN__', '<br>')
+    return f'<p><span style="{BODY_SPAN_STYLE}">{escaped}</span></p>'
+
+
 def split_content_into_chunks(soup):
-    """
-    Splits the soup content into a list of chunks:
-    [{'type': 'html', 'content': '...'}, {'type': 'image', 'path': '...'}]
+    """Split the parsed Tistory content into ordered chunks for the paste loop.
+
+    Each chunk is either {'type': 'html', 'content': str} or
+    {'type': 'image', 'path': str}. Top-level elements are walked once and
+    classified:
+      - <hr>                \u2192 '<hr>' literal (Naver promotes this to its
+                              SmartEditor horizontal-line block on paste)
+      - <h1>..<h6>          \u2192 yellow-highlighted bold heading + barrier <p>
+      - element with <img>  \u2192 flush html buffer, emit image chunk(s)
+      - <blockquote>/other  \u2192 body-styled paragraph
     """
     chunks = []
-    current_html_parts = []
-    
-    # We iterate over top-level elements of the content
-    # If content_candidate is a container, get its children
-    # This assumes a flat structure mainly (p, div, figure...)
-    
-    # Flatten checks: Tistory often puts img inside figure or p
-    # We want to break at any IMG.
-    
-    # Recursive walker or logical split? 
-    # Logical split: stringify everything until an img, then img, then stringify...
-    # But simple string split might break tags.
-    # Better: Iterate recursive, but flattened? 
-    # Let's iterate find_all(['p', 'div', 'figure', 'img', 'table', 'h1', 'h2', 'h3', 'ul', 'ol', 'blockquote']) recursive=False?
-    # No, 'img' might be deep.
-    
-    # Robust approach: 
-    # 1. Find all `img` tags.
-    # 2. Use them as delimiters.
-    # 3. Everything before img1 is HTML chunk 1.
-    # 4. img1 is Image chunk 1.
-    # 5. Between img1 and img2 is HTML chunk 2...
-    
-    # Using `soup.decode_contents()` gives full string.
-    # We can use regex to split, but that's risky for HTML.
-    
-    # Alternative:
-    # Walk the tree. If we hit an IMG, we flush the current buffer and yield an Image chunk.
-    # This is tricky with nesting.
-    
-    # Let's try a simplified approach:
-    # 1. Identify all `img` nodes.
-    # 2. Create a list of "Nodes to Process".
-    # 3. If a node contains an img, decompose it? No.
-    
-    # Best approach for "One Line by One Line" macro as requested:
-    # Just iterate top-level tags!
-    # Tistory structure:
-    # <p>Text</p>
-    # <figure><img></figure>
-    # <p>Text</p>
-    
-    # If the img is inside a P or Figure, we treat that whole block as "Image" if it's dominant?
-    # User said "Text or line -> Photo".
-    
-    top_level_elements = list(soup.children)
     current_html = ""
-    
-    for element in top_level_elements:
+
+    for element in list(soup.children):
         if element.name is None:
-            # NavigableString (text/whitespace)
-            text = str(element)
-            if text.strip():
-                current_html += text
+            text = str(element).strip()
+            if text:
+                current_html += _body_html_from_text(text)
             continue
-            
-        # Check if element HAS an image
+
+        # Section divider \u2014 preserve as Naver paste-time hr
+        if element.name == 'hr':
+            current_html += '<hr>'
+            continue
+
+        # Headings \u2014 Tistory wraps section titles in <h1>..<h4>, sometimes
+        # with an inner <span style="background-color:#f6e199;">. We always
+        # convert to the blog skill's canonical highlighted heading.
+        if element.name in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
+            text = element.get_text(separator=' ', strip=True)
+            if text:
+                current_html += _heading_html(text)
+            continue
+
+        # Images \u2014 split out as separate paste chunks so Naver uploads each
         imgs = element.find_all('img')
         if imgs:
-            # If it has images, we might need to split this element if it also has text?
-            # Usually Tistory wraps img in <figure> or <p> with just the image.
-            # If there is text + image in one <p>, it's hard to separate cleanly without destructuring.
-            # For now, let's assuming images are block-levelish.
-            
-            # If multiple images?
             for img in imgs:
-                # Flush previous html
                 if current_html.strip():
                     chunks.append({'type': 'html', 'content': current_html})
                     current_html = ""
-                
-                src = img.get('src') or img.get('data-url')
-                if src:
-                    # Resolve protocol
-                    if src.startswith('//'): src = 'https:' + src
-                    
-                    local_path = download_image(src)
-                    if local_path:
-                        chunks.append({'type': 'image', 'path': local_path})
-            
-            # What if there was text *around* the image in that same P?
-            # We lose it if we don't handle it. 
-            # But extracting text from a node ignoring img is easy (get_text), but formatting...
-            # This 'simple splitter' assumes images are their own blocks. 
-            # If mixed, we might skip the text.
-            # Given "TistoryToNaver", usually distinct blocks.
-        else:
-            # Just HTML
-            # Strategy: preserve layout but remove style.
-            
-            # 1. Protect <br>
-            # We accept that 'element' might be modified, so we work on a copy if needed, 
-            # but here modifying the soup in place is fine as we are consuming it.
-            for br in element.find_all('br'):
-                br.replace_with('__BR_TOKEN__')
-            
-            # 2. Get text
-            # strip=True removes leading/trailing whitespace including &nbsp; if it's the only thing.
-            clean_text = element.get_text(separator=' ', strip=True) 
-            
-            # Restore tokens
-            clean_html_content = clean_text.replace('__BR_TOKEN__', '<br>')
-            
-            # 3. Check for specific Tistory "Empty Line" patterns if result is empty
-            # Tistory often uses <p>&nbsp;</p> for blank lines.
-            if not clean_html_content:
-                # If it's a block element (p, div, blockquote) and has &nbsp;, treat as newline
-                if element.name in ['p', 'div', 'blockquote', 'li', 'h1', 'h2', 'h3', 'h4']:
-                    original_text = element.get_text() # Raw text without strip
-                    if '\u00a0' in original_text or '&nbsp;' in str(element):
-                        clean_html_content = "<br>"
-            
-            if clean_html_content:
-                # Wrap in P to ensure block behavior in Naver
-                # Naver Editor likes <p> for lines.
-                current_html += f"<p>{clean_html_content}</p>"
-            
-    # Flush remaining
+                src = img.get('data-url') or img.get('data-src') or img.get('src')
+                if not src:
+                    continue
+                if src.startswith('//'):
+                    src = 'https:' + src
+                local_path = download_image(src)
+                if local_path:
+                    chunks.append({'type': 'image', 'path': local_path})
+            continue
+
+        # Generic block \u2014 preserve <br>, then emit body-styled paragraph
+        for br in element.find_all('br'):
+            br.replace_with('__BR_TOKEN__')
+        raw = element.get_text(separator=' ', strip=True)
+        if not raw:
+            # Tistory uses <p>&nbsp;</p> for visual blank lines \u2014 keep as barrier
+            if element.name in ('p', 'div', 'br'):
+                original = element.get_text()
+                if '\u00a0' in original or '&nbsp;' in str(element):
+                    current_html += BARRIER_HTML
+            continue
+        current_html += _body_html_from_text(raw)
+
     if current_html.strip():
         chunks.append({'type': 'html', 'content': current_html})
-        
+
     return chunks
 
 def copy_image_file_to_clipboard(filepath):
