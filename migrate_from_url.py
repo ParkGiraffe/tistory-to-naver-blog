@@ -61,37 +61,53 @@ def download_image(url):
     return None
 
 def fetch_and_parse(url):
+    """Backwards-compatible wrapper — returns just the content soup."""
+    post = fetch_post(url)
+    return post['content']
+
+
+def fetch_post(url):
+    """Fetch a Tistory post and return both content soup and post metadata.
+
+    Returns: dict with keys
+        - 'content': BeautifulSoup of the article body (or None on failure)
+        - 'source_url': the URL passed in
+        - 'published_iso': ISO 8601 publish timestamp from
+          <meta property="article:published_time"> (or None if absent)
+    """
     print(f"Fetching URL: {url}")
     headers = {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
-    
+
     try:
         resp = requests.get(url, headers=headers)
         resp.raise_for_status()
     except Exception as e:
         print(f"Error fetching URL: {e}")
-        return None
+        return {'content': None, 'source_url': url, 'published_iso': None}
 
-    soup = BeautifulSoup(resp.text, 'html.parser')
-    
+    full_soup = BeautifulSoup(resp.text, 'html.parser')
+
     # Target selectors based on Tistory structure
-    # Common ones: .tt_article_useless_p_margin, .entry-content, .article_view
-    content_candidate = soup.select_one('.tt_article_useless_p_margin')
+    content_candidate = full_soup.select_one('.tt_article_useless_p_margin')
     if not content_candidate:
-        content_candidate = soup.select_one('.entry-content')
+        content_candidate = full_soup.select_one('.entry-content')
     if not content_candidate:
-        content_candidate = soup.select_one('article')
-        
+        content_candidate = full_soup.select_one('article')
+
     if not content_candidate:
         print("Could not find content container (looked for .tt_article_useless_p_margin, .entry-content).")
-        return None
-        
+        return {'content': None, 'source_url': url, 'published_iso': None}
+
     # Cleanup: Remove scripts, ads, iframes
     for useless in content_candidate.select('script, iframe, ins, .adsbygoogle, .revenue_unit_wrap, .container_postbtn'):
         useless.decompose()
-        
-    return content_candidate
+
+    pub_meta = full_soup.find('meta', attrs={'property': 'article:published_time'})
+    published_iso = pub_meta.get('content') if pub_meta and pub_meta.has_attr('content') else None
+
+    return {'content': content_candidate, 'source_url': url, 'published_iso': published_iso}
 
 import plistlib
 
@@ -266,7 +282,44 @@ def _body_html_from_text(text_with_br_tokens):
     return f'<p><span style="{BODY_SPAN_STYLE}">{escaped}</span></p>'
 
 
-def split_content_into_chunks(soup):
+def _build_footer_html(source_url, published_iso):
+    """Build the Tistory-migration footer HTML.
+
+    Format (matches user spec):
+        <blank>
+        \ud574\ub2f9 \uae00\uc740 \ud2f0\uc2a4\ud1a0\ub9ac \ube14\ub85c\uadf8 <URL>\uc758 \uae00\uc744 \ub9c8\uc774\uadf8\ub808\uc774\uc158\ud55c \uae00\uc785\ub2c8\ub2e4.
+        <blank>
+        \uc6d0\ubcf8 \uc791\uc131\uc77c : YYYY\ub144 MM\uc6d4 DD\uc77c
+
+    Returns the assembled HTML string, or '' if neither value is provided.
+    """
+    if not source_url and not published_iso:
+        return ''
+    parts = [BARRIER_HTML, BARRIER_HTML]
+    if source_url:
+        u = _html_escape(source_url)
+        parts.append(
+            f'<p><span style="{BODY_SPAN_STYLE}">'
+            f'\ud574\ub2f9 \uae00\uc740 \ud2f0\uc2a4\ud1a0\ub9ac \ube14\ub85c\uadf8 '
+            f'<a href="{u}">{u}</a>'
+            f'\uc758 \uae00\uc744 \ub9c8\uc774\uadf8\ub808\uc774\uc158\ud55c \uae00\uc785\ub2c8\ub2e4.</span></p>'
+        )
+    if published_iso:
+        parts.append(BARRIER_HTML)
+        try:
+            from datetime import datetime
+            dt = datetime.fromisoformat(published_iso)
+            date_kr = dt.strftime('%Y\ub144 %m\uc6d4 %d\uc77c')
+        except Exception:
+            date_kr = published_iso
+        parts.append(
+            f'<p><span style="{BODY_SPAN_STYLE}">'
+            f'\uc6d0\ubcf8 \uc791\uc131\uc77c : {_html_escape(date_kr)}</span></p>'
+        )
+    return ''.join(parts)
+
+
+def split_content_into_chunks(soup, source_url=None, published_iso=None):
     """Split the parsed Tistory content into ordered chunks for the paste loop.
 
     Each chunk is either {'type': 'html', 'content': str} or
@@ -277,6 +330,9 @@ def split_content_into_chunks(soup):
       - <h1>..<h6>          \u2192 yellow-highlighted bold heading + barrier <p>
       - element with <img>  \u2192 flush html buffer, emit image chunk(s)
       - <blockquote>/other  \u2192 body-styled paragraph
+
+    If source_url and/or published_iso are provided, a Tistory-migration
+    footer chunk is appended after all body chunks.
     """
     chunks = []
     current_html = ""
@@ -334,6 +390,10 @@ def split_content_into_chunks(soup):
 
     if current_html.strip():
         chunks.append({'type': 'html', 'content': current_html})
+
+    footer = _build_footer_html(source_url, published_iso)
+    if footer:
+        chunks.append({'type': 'html', 'content': footer})
 
     return chunks
 

@@ -59,17 +59,18 @@ def run_migration():
 
     try:
         print(f"Starting migration for: {url}")
-        migrate_from_url.fetch_and_parse(url) # Verify fetching logic
-        # Actually calling main logic via subprocess or direct call
-        # Since migrate_from_url is importable, let's use its main logic but refactored or just call its functions.
-        # Calling its main() might rely on argv, so let's set argv or call logic directly.
-        
-        # Better: use the functions directly
-        soup = migrate_from_url.fetch_and_parse(url)
+        post = migrate_from_url.fetch_post(url)
+        soup = post['content']
         if soup:
             print("Splitting content into chunks for Sequential Macro...")
-            chunks = migrate_from_url.split_content_into_chunks(soup)
+            chunks = migrate_from_url.split_content_into_chunks(
+                soup,
+                source_url=post['source_url'],
+                published_iso=post['published_iso'],
+            )
             print(f"Prepared {len(chunks)} chunks (Text/Images).")
+            if post['published_iso']:
+                print(f"Original post date: {post['published_iso']} → footer auto-appended.")
             
             print("\n*** CHOICE ***")
             print("1. Auto Mode (Requires Accessibility Permission for Terminal)")
