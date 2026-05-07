@@ -268,10 +268,48 @@ def _html_escape(s):
 
 
 def _heading_html(text):
-    return (
-        f'<p><span style="{HEADING_SPAN_STYLE}"><b>{_html_escape(text)}</b></span></p>'
-        + BARRIER_HTML
+    """Emit a Naver SmartEditor 소제목 (section title) component.
+
+    Strategy: serialize the full se-sectionTitle component markup so Naver's
+    paste handler can recognize and recreate it as a native component. The
+    inner span ALSO carries inline styles (font-size:30px, nanumgothic, black,
+    bold) as a fallback — if Naver's sanitizer strips the se-component
+    wrapper, the heading still renders visually as 30px black bold text
+    instead of degrading to body-sized text.
+
+    Style mirrors the user-supplied 소제목+볼드체 component:
+      - font-family: nanumgothic, fallback Nanum Gothic / 나눔고딕 / sans-serif
+      - font-size: 30px (matches se-fs30)
+      - color: #000000
+      - bold via <b>
+      - paragraph line-height: 1.5
+    A trailing <p><br></p> barrier still follows so the next body paragraph
+    cannot inherit the heading's styles.
+    """
+    inner = _html_escape(text)
+    span_style = (
+        "font-size:30px;"
+        "font-family:'Nanum Gothic',나눔고딕,sans-serif;"
+        "color:#000000;"
     )
+    span = (
+        f'<span class="se-ff-nanumgothic se-fs30" style="{span_style}">'
+        f'<b>{inner}</b></span>'
+    )
+    para = (
+        f'<p class="se-text-paragraph se-text-paragraph-align-left" '
+        f'style="line-height: 1.5;">{span}</p>'
+    )
+    component = (
+        '<div class="se-component se-sectionTitle se-l-default" '
+        'data-a11y-title="소제목">'
+        '<div class="se-component-content">'
+        '<div class="se-section se-section-sectionTitle se-l-default">'
+        '<div class="se-module se-module-text">'
+        f'{para}'
+        '</div></div></div></div>'
+    )
+    return component + BARRIER_HTML
 
 
 def _body_html_from_text(text_with_br_tokens):
