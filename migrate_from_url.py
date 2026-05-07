@@ -382,7 +382,10 @@ def split_content_into_chunks(soup, source_url=None, published_iso=None):
                 current_html += _body_html_from_text(text)
             continue
 
-        # Section divider \u2014 preserve as Naver paste-time hr
+        # Section divider \u2014 preserve as Naver paste-time hr.
+        # native \ucef4\ud3ec\ub10c\ud2b8(se-horizontalLine se-l-line3 \ub4f1) \ub9c8\ud06c\uc5c5 \uc2dc\ub3c4\ub294
+        # sanitizer\uac00 line type class\ub97c \ubaa8\ub450 default \ub85c \ub5a8\uc5b4\ub728\ub824 \uc2e4\ud328.
+        # \uc815\ud655\ud55c paste payload \ub97c \uc54c\uc544\ub0bc \ubc29\ubc95\uc774 \uc5c6\uc5b4 \ub2e8\uc21c <hr> \ub85c \uc720\uc9c0.
         if element.name == 'hr':
             current_html += '<hr>'
             continue
