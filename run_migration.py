@@ -67,10 +67,13 @@ def run_migration():
                 soup,
                 source_url=post['source_url'],
                 published_iso=post['published_iso'],
+                tags=post.get('tags'),
             )
             print(f"Prepared {len(chunks)} chunks (Text/Images).")
             if post['published_iso']:
                 print(f"Original post date: {post['published_iso']} → footer auto-appended.")
+            if post.get('tags'):
+                print(f"Tags ({len(post['tags'])}): {', '.join(post['tags'])} → hashtag line appended.")
             
             print("\n*** CHOICE ***")
             print("1. Auto Mode (Requires Accessibility Permission for Terminal)")

@@ -85,7 +85,7 @@ def fetch_post(url):
         resp.raise_for_status()
     except Exception as e:
         print(f"Error fetching URL: {e}")
-        return {'content': None, 'source_url': url, 'published_iso': None}
+        return {'content': None, 'source_url': url, 'published_iso': None, 'tags': []}
 
     full_soup = BeautifulSoup(resp.text, 'html.parser')
 
@@ -98,7 +98,7 @@ def fetch_post(url):
 
     if not content_candidate:
         print("Could not find content container (looked for .tt_article_useless_p_margin, .entry-content).")
-        return {'content': None, 'source_url': url, 'published_iso': None}
+        return {'content': None, 'source_url': url, 'published_iso': None, 'tags': []}
 
     # Cleanup: Remove scripts, ads, iframes
     for useless in content_candidate.select('script, iframe, ins, .adsbygoogle, .revenue_unit_wrap, .container_postbtn'):
@@ -107,7 +107,16 @@ def fetch_post(url):
     pub_meta = full_soup.find('meta', attrs={'property': 'article:published_time'})
     published_iso = pub_meta.get('content') if pub_meta and pub_meta.has_attr('content') else None
 
-    return {'content': content_candidate, 'source_url': url, 'published_iso': published_iso}
+    # Tags: Tistory renders them as <div class="tags"><a rel="tag">...</a>, ...</div>
+    tags = []
+    tag_container = full_soup.select_one('div.tags')
+    if tag_container:
+        for a in tag_container.select('a[rel="tag"]'):
+            t = a.get_text(strip=True)
+            if t and t not in tags:
+                tags.append(t)
+
+    return {'content': content_candidate, 'source_url': url, 'published_iso': published_iso, 'tags': tags}
 
 import plistlib
 
@@ -291,7 +300,7 @@ def _body_html_from_text(text_with_br_tokens):
     return f'<p><span style="{BODY_SPAN_STYLE}">{escaped}</span></p>'
 
 
-def _build_footer_html(source_url, published_iso):
+def _build_footer_html(source_url, published_iso, tags=None):
     """Build the Tistory-migration footer HTML.
 
     Format (matches user spec):
@@ -302,7 +311,7 @@ def _build_footer_html(source_url, published_iso):
 
     Returns the assembled HTML string, or '' if neither value is provided.
     """
-    if not source_url and not published_iso:
+    if not source_url and not published_iso and not tags:
         return ''
     parts = [BARRIER_HTML, BARRIER_HTML]
     if source_url:
@@ -314,7 +323,6 @@ def _build_footer_html(source_url, published_iso):
             f'\uc758 \uae00\uc744 \ub9c8\uc774\uadf8\ub808\uc774\uc158\ud55c \uae00\uc785\ub2c8\ub2e4.</span></p>'
         )
     if published_iso:
-        parts.append(BARRIER_HTML)
         try:
             from datetime import datetime
             dt = datetime.fromisoformat(published_iso)
@@ -325,10 +333,23 @@ def _build_footer_html(source_url, published_iso):
             f'<p><span style="{BODY_SPAN_STYLE}">'
             f'\uc6d0\ubcf8 \uc791\uc131\uc77c : {_html_escape(date_kr)}</span></p>'
         )
+    if tags:
+        # Plain-text hashtag line. Internal whitespace inside each tag is removed
+        # so multi-word Tistory tags (e.g. "\uc81c\ub2e4 \uc0ac\ub2f9 \uacf5\ub7b5") become a single
+        # hashtag token (#\uc81c\ub2e4\uc0ac\ub2f9\uacf5\ub7b5). These are NOT real Naver tags \u2014
+        # they're visual decoration only; the user must enter real tags in the
+        # SmartEditor sidebar separately.
+        import re as _re
+        hashtags = ' '.join('#' + _re.sub(r'\s+', '', t) for t in tags if t and t.strip())
+        if hashtags:
+            parts.append(BARRIER_HTML)
+            parts.append(
+                f'<p><span style="{BODY_SPAN_STYLE}">{_html_escape(hashtags)}</span></p>'
+            )
     return ''.join(parts)
 
 
-def split_content_into_chunks(soup, source_url=None, published_iso=None):
+def split_content_into_chunks(soup, source_url=None, published_iso=None, tags=None):
     """Split the parsed Tistory content into ordered chunks for the paste loop.
 
     Each chunk is either {'type': 'html', 'content': str} or
@@ -403,7 +424,7 @@ def split_content_into_chunks(soup, source_url=None, published_iso=None):
     if current_html.strip():
         chunks.append({'type': 'html', 'content': current_html})
 
-    footer = _build_footer_html(source_url, published_iso)
+    footer = _build_footer_html(source_url, published_iso, tags=tags)
     if footer:
         chunks.append({'type': 'html', 'content': footer})
 
