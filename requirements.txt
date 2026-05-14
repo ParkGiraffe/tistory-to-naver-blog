@@ -1,0 +1,6 @@
+pytest
+beautifulsoup4
+requests
+pyobjc-framework-Cocoa
+customtkinter
+pyinstaller
