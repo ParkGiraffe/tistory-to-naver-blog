@@ -300,6 +300,79 @@ def _body_html_from_text(text_with_br_tokens):
     return f'<p><span style="{BODY_SPAN_STYLE}">{escaped}</span></p>'
 
 
+BODY_BOLD_SPAN_STYLE = (
+    "font-size:15px;font-weight:bold;background-color:transparent;"
+    "color:#212529;"
+)
+
+
+def _inline_segments(element):
+    """Walk element children and yield (text, bold) tuples. <b>/<strong>
+    descendants flip the bold flag; <br> becomes a __BR_TOKEN__ marker."""
+    segments = []
+
+    def walk(node, bold):
+        for child in node.children:
+            if child.name is None:
+                segments.append((str(child), bold))
+            elif child.name == 'br':
+                segments.append(('__BR_TOKEN__', bold))
+            elif child.name in ('b', 'strong'):
+                walk(child, True)
+            else:
+                walk(child, bold)
+
+    walk(element, False)
+    return segments
+
+
+_WS_RE = re.compile(r'[ \t\n\r]+')
+
+
+def _body_html_from_element(element):
+    """Body paragraph that preserves inline <b>/<strong> + <br>.
+
+    Outputs alternating <span> segments inside a single <p>: normal text uses
+    BODY_SPAN_STYLE (with font-weight:normal to block heading bleed); bold
+    text uses BODY_BOLD_SPAN_STYLE which overrides weight. Whitespace inside
+    each text node is collapsed to single spaces, but   is preserved."""
+    raw_segments = _inline_segments(element)
+    if not raw_segments:
+        return ''
+
+    # Merge consecutive same-bold segments so we emit one <span> per run.
+    merged = []
+    for text, bold in raw_segments:
+        if merged and merged[-1][1] == bold:
+            merged[-1] = (merged[-1][0] + text, bold)
+        else:
+            merged.append([text, bold])
+
+    # Collapse whitespace within each segment, but keep __BR_TOKEN__ intact.
+    normalized = []
+    for text, bold in merged:
+        pieces = text.split('__BR_TOKEN__')
+        pieces = [_WS_RE.sub(' ', p) for p in pieces]
+        text = '__BR_TOKEN__'.join(pieces)
+        normalized.append([text, bold])
+
+    # Trim leading/trailing whitespace across the whole paragraph.
+    if normalized:
+        normalized[0][0] = normalized[0][0].lstrip()
+    if normalized:
+        normalized[-1][0] = normalized[-1][0].rstrip()
+    normalized = [(t, b) for t, b in normalized if t]
+    if not normalized:
+        return ''
+
+    parts = []
+    for text, bold in normalized:
+        escaped = _html_escape(text).replace('__BR_TOKEN__', '<br>')
+        style = BODY_BOLD_SPAN_STYLE if bold else BODY_SPAN_STYLE
+        parts.append(f'<span style="{style}">{escaped}</span>')
+    return f'<p>{"".join(parts)}</p>'
+
+
 def _build_footer_html(source_url, published_iso, tags=None):
     """Build the Tistory-migration footer HTML.
 
@@ -408,18 +481,16 @@ def split_content_into_chunks(soup, source_url=None, published_iso=None, tags=No
                     chunks.append({'type': 'image', 'path': local_path})
             continue
 
-        # Generic block \u2014 preserve <br>, then emit body-styled paragraph
-        for br in element.find_all('br'):
-            br.replace_with('__BR_TOKEN__')
-        raw = element.get_text(separator=' ', strip=True)
-        if not raw:
-            # Tistory uses <p>&nbsp;</p> for visual blank lines \u2014 keep as barrier
-            if element.name in ('p', 'div', 'br'):
-                original = element.get_text()
-                if '\u00a0' in original or '&nbsp;' in str(element):
-                    current_html += BARRIER_HTML
+        # Generic block \u2014 preserve inline <b>/<strong> + <br>, emit body paragraph
+        html_para = _body_html_from_element(element)
+        if html_para:
+            current_html += html_para
             continue
-        current_html += _body_html_from_text(raw)
+        # Tistory uses <p>&nbsp;</p> for visual blank lines \u2014 keep as barrier
+        if element.name in ('p', 'div', 'br'):
+            original = element.get_text()
+            if '\u00a0' in original or '&nbsp;' in str(element):
+                current_html += BARRIER_HTML
 
     if current_html.strip():
         chunks.append({'type': 'html', 'content': current_html})
