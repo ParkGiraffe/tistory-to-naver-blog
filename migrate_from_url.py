@@ -1,5 +1,6 @@
 import sys
 import os
+import json
 import requests
 from bs4 import BeautifulSoup
 import AppKit
@@ -10,6 +11,9 @@ import re
 # Configuration
 TEMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
 os.makedirs(TEMP_DIR, exist_ok=True)
+
+# Sidecar file consumed by inject_code_blocks.py (pass 2: native code components)
+CODE_BLOCKS_JSON = "/tmp/naver_code_blocks.json"
 
 def clear_temp_images():
     """Clears all files in the temporary images directory."""
@@ -439,6 +443,7 @@ def split_content_into_chunks(soup, source_url=None, published_iso=None, tags=No
     """
     chunks = []
     current_html = ""
+    code_blocks = []
 
     for element in list(soup.children):
         if element.name is None:
@@ -462,6 +467,22 @@ def split_content_into_chunks(soup, source_url=None, published_iso=None, tags=No
             text = element.get_text(separator=' ', strip=True)
             if text:
                 current_html += _heading_html(text)
+            continue
+
+        # Code blocks \u2014 Tistory <pre> \u2192 placeholder paragraph [[CODE-n]].
+        # paste sanitizer \ub54c\ubb38\uc5d0 \ucf54\ub4dc \ucef4\ud3ec\ub10c\ud2b8\ub3c4 paste \ub85c\ub294 \uc8fc\uc785 \ubd88\uac00 \u2014
+        # \uc6d0\ubcf8 \ucf54\ub4dc\ub294 CODE_BLOCKS_JSON \uc73c\ub85c \ub118\uae30\uace0, paste \uc885\ub8cc \ud6c4
+        # inject_code_blocks.py (pass 2) \uac00 placeholder \uc790\ub9ac\uc5d0 native
+        # SmartEditor \ucf54\ub4dc \ucef4\ud3ec\ub10c\ud2b8\ub97c \uc0bd\uc785\ud55c\ub2e4.
+        pres = [element] if element.name == 'pre' else element.find_all('pre')
+        if pres:
+            for pre in pres:
+                code_blocks.append({
+                    'index': len(code_blocks) + 1,
+                    'language': ' '.join(pre.get('class') or []) or None,
+                    'code': pre.get_text(),
+                })
+                current_html += _body_html_from_text(f'[[CODE-{len(code_blocks)}]]')
             continue
 
         # Images \u2014 split out as separate paste chunks so Naver uploads each
@@ -498,6 +519,16 @@ def split_content_into_chunks(soup, source_url=None, published_iso=None, tags=No
     footer = _build_footer_html(source_url, published_iso, tags=tags)
     if footer:
         chunks.append({'type': 'html', 'content': footer})
+
+    if code_blocks:
+        try:
+            with open(CODE_BLOCKS_JSON, 'w', encoding='utf-8') as f:
+                json.dump(code_blocks, f, ensure_ascii=False, indent=2)
+            print(f"[CODE] {len(code_blocks)} code block(s) -> [[CODE-n]] placeholders")
+            print(f"[CODE] source saved: {CODE_BLOCKS_JSON}")
+            print("[CODE] after pasting finishes, run: python3 inject_code_blocks.py")
+        except OSError as e:
+            print(f"[CODE][WARN] could not write {CODE_BLOCKS_JSON}: {e}")
 
     return chunks
 
