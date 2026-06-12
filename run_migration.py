@@ -84,17 +84,67 @@ def run_migration():
                 print("\n*** AUTO MACRO STARTING In 3 Seconds ***")
                 print("Focus on Naver Editor NOW!")
                 time.sleep(3)
+
+                # Per-chunk verification: pasting blindly loses chunks when
+                # the editor is busy (image upload in flight swallows Cmd+V).
+                # Images must add one .se-component.se-image; html chunks must
+                # grow the .se-text paragraph count (SE merges consecutive
+                # text pastes into one component, so component count is not
+                # reliable for text).
+                def editor_counts():
+                    js = ("JSON.stringify({img: document.querySelectorAll("
+                          "'.se-component.se-image').length, p: document."
+                          "querySelectorAll('.se-component.se-text p').length})")
+                    script = ('tell application "Google Chrome"\n'
+                              'repeat with w in windows\n'
+                              'repeat with t in tabs of w\n'
+                              'if URL of t contains "/postwrite" then\n'
+                              f'return execute t javascript "{js}"\n'
+                              'end if\nend repeat\nend repeat\nend tell')
+                    try:
+                        import json as _json
+                        out = subprocess.run(["osascript", "-e", script],
+                                             capture_output=True, text=True, timeout=10)
+                        return _json.loads(out.stdout.strip())
+                    except Exception:
+                        return None
+
+                def wait_for_growth(kind, before, timeout=8.0):
+                    """Poll until the relevant count grows; returns True/False."""
+                    if before is None:
+                        time.sleep(1.5 if kind == 'image' else 0.6)
+                        return True  # verification unavailable — fall back to delay
+                    deadline = time.time() + timeout
+                    while time.time() < deadline:
+                        now = editor_counts()
+                        if now:
+                            if kind == 'image' and now['img'] > before['img']:
+                                return True
+                            if kind == 'html' and now['p'] > before['p']:
+                                return True
+                        time.sleep(0.4)
+                    return False
+
                 for i, chunk in enumerate(chunks):
                     label = "Text" if chunk['type'] == 'html' else "Image"
-                    print(f"[{i+1}/{len(chunks)}] Pasting {label}...")
-                    
-                    if chunk['type'] == 'html':
-                        migrate_from_url.copy_html_to_clipboard(chunk['content'])
-                    elif chunk['type'] == 'image':
-                        migrate_from_url.copy_image_file_to_clipboard(chunk['path'])
-                    
-                    migrate_from_url.paste_cmd()
-                    time.sleep(0.5 if chunk['type'] == 'html' else 1.0)
+                    print(f"[{i+1}/{len(chunks)}] Pasting {label}...", end=" ", flush=True)
+
+                    for attempt in (1, 2, 3):
+                        before = editor_counts()
+                        if chunk['type'] == 'html':
+                            migrate_from_url.copy_html_to_clipboard(chunk['content'])
+                        elif chunk['type'] == 'image':
+                            migrate_from_url.copy_image_file_to_clipboard(chunk['path'])
+                        migrate_from_url.paste_cmd()
+                        time.sleep(0.5 if chunk['type'] == 'html' else 1.0)
+                        if wait_for_growth(chunk['type'], before):
+                            print("OK" if attempt == 1 else f"OK (retry {attempt - 1})")
+                            break
+                        if attempt < 3:
+                            print(f"\n    -> not registered, retrying ({attempt})...", end=" ", flush=True)
+                            time.sleep(1.0)
+                    else:
+                        print("FAILED after 3 attempts — continuing")
             else:
                 print("\n*** MANUAL MODE ***")
                 print("Tip: Enable 'Terminal' in System Settings > Privacy > Accessibility availability to use Auto Mode next time.")

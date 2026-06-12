@@ -111,6 +111,9 @@ def fetch_post(url):
     pub_meta = full_soup.find('meta', attrs={'property': 'article:published_time'})
     published_iso = pub_meta.get('content') if pub_meta and pub_meta.has_attr('content') else None
 
+    title_meta = full_soup.find('meta', attrs={'property': 'og:title'})
+    post_title = title_meta.get('content') if title_meta and title_meta.has_attr('content') else None
+
     # Tags: Tistory renders them as <div class="tags"><a rel="tag">...</a>, ...</div>
     tags = []
     tag_container = full_soup.select_one('div.tags')
@@ -120,7 +123,7 @@ def fetch_post(url):
             if t and t not in tags:
                 tags.append(t)
 
-    return {'content': content_candidate, 'source_url': url, 'published_iso': published_iso, 'tags': tags}
+    return {'content': content_candidate, 'source_url': url, 'published_iso': published_iso, 'tags': tags, 'title': post_title}
 
 import plistlib
 
