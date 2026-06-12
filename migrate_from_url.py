@@ -523,15 +523,17 @@ def split_content_into_chunks(soup, source_url=None, published_iso=None, tags=No
     if footer:
         chunks.append({'type': 'html', 'content': footer})
 
-    if code_blocks:
-        try:
-            with open(CODE_BLOCKS_JSON, 'w', encoding='utf-8') as f:
-                json.dump(code_blocks, f, ensure_ascii=False, indent=2)
+    # Always (re)write the sidecar — a stale file from a previous post would
+    # otherwise make the injection pass hunt for placeholders that don't exist.
+    try:
+        with open(CODE_BLOCKS_JSON, 'w', encoding='utf-8') as f:
+            json.dump(code_blocks, f, ensure_ascii=False, indent=2)
+        if code_blocks:
             print(f"[CODE] {len(code_blocks)} code block(s) -> [[CODE-n]] placeholders")
             print(f"[CODE] source saved: {CODE_BLOCKS_JSON}")
             print("[CODE] after pasting finishes, run: python3 inject_code_blocks.py")
-        except OSError as e:
-            print(f"[CODE][WARN] could not write {CODE_BLOCKS_JSON}: {e}")
+    except OSError as e:
+        print(f"[CODE][WARN] could not write {CODE_BLOCKS_JSON}: {e}")
 
     return chunks
 
