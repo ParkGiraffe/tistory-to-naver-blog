@@ -271,6 +271,12 @@ def write_multi_format_to_clipboard(web_archive_dict, html_content, plain_text):
 # skill produce visually identical output (yellow-highlighted bold headings +
 # explicit body span reset to block style bleed from headings).
 HEADING_SPAN_STYLE = "font-size:24px;background-color:#fff593;"
+# Sub-headings (Tistory <h3>/<h4> with no yellow background span) render one
+# step down: slightly smaller, bold, NO yellow highlight. Keeps the visual
+# hierarchy the author intended instead of flattening every level to 24px.
+SUBHEADING_SPAN_STYLE = (
+    "font-size:19px;background-color:transparent;color:#212529;"
+)
 BODY_SPAN_STYLE = (
     "font-size:15px;font-weight:normal;background-color:transparent;"
     "color:#212529;"
@@ -297,6 +303,23 @@ def _heading_html(text):
         f'<p><span style="{HEADING_SPAN_STYLE}"><b>{_html_escape(text)}</b></span></p>'
         + BARRIER_HTML
     )
+
+
+def _subheading_html(text):
+    """Emit a bold sub-heading paragraph: smaller than a main heading and with
+    NO yellow background, mirroring Tistory's plain-bold <h3> sub-titles."""
+    return (
+        f'<p><span style="{SUBHEADING_SPAN_STYLE}"><b>{_html_escape(text)}</b></span></p>'
+        + BARRIER_HTML
+    )
+
+
+def _heading_has_highlight(element):
+    """True if the heading carries a background-color span (the author's
+    yellow-highlight = a main section title). Plain bold = a sub-heading."""
+    return element.find(
+        lambda t: t.has_attr('style') and 'background-color' in t.get('style', '')
+    ) is not None
 
 
 def _body_html_from_text(text_with_br_tokens):
@@ -469,7 +492,13 @@ def split_content_into_chunks(soup, source_url=None, published_iso=None, tags=No
         if element.name in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
             text = element.get_text(separator=' ', strip=True)
             if text:
-                current_html += _heading_html(text)
+                # Main title (h1) or any heading the author highlighted yellow
+                # → big yellow heading. Plain-bold h3/h4 (no highlight) → smaller
+                # sub-heading with no background, preserving Tistory's hierarchy.
+                if element.name == 'h1' or _heading_has_highlight(element):
+                    current_html += _heading_html(text)
+                else:
+                    current_html += _subheading_html(text)
             continue
 
         # Code blocks \u2014 Tistory <pre> \u2192 placeholder paragraph [[CODE-n]].
