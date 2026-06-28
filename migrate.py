@@ -338,7 +338,9 @@ def paste_chunks(chunks):
 def style_pass():
     results = {"hr": 0, "img": 0}
     for kind, js in (("hr", JS_STYLE_NEXT_HR), ("img", JS_STYLE_NEXT_IMG)):
-        for _ in range(150):
+        # high safety cap; the loop already breaks on "done" when no unstyled
+        # component remains. (was range(150) -> capped big posts at 150 images)
+        for _ in range(2000):
             r = chrome_js(js)
             if r == "done":
                 break
